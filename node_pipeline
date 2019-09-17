@@ -1,0 +1,67 @@
+def label = "docker-slave-${UUID.randomUUID().toString()}"
+podTemplate(label: label, containers: [
+    containerTemplate(name: 'docker', image: 'durgaprasad444/jenmine:1.1', ttyEnabled: true, command: 'cat'),
+    containerTemplate(name: 'node', image: 'node:latest', ttyEnabled: true, command: 'cat'),
+    containerTemplate(name: 'kubectl', image: 'lachlanevenson/k8s-kubectl:v1.8.8', ttyEnabled: true, command: 'cat')
+],
+volumes: [
+  hostPathVolume(mountPath: '/var/run/docker.sock', hostPath: '/var/run/docker.sock')
+]) {
+    node(label) {
+        def APP_NAME = "facelift"
+        def tag = "dev"
+            stage("clone code") {
+                container('node') {
+                    
+  stage 'checkout  repository'
+  checkout([$class: 'GitSCM',
+        branches: [[name: '*/feature/test']],
+        doGenerateSubmoduleConfigurations: false,
+        extensions: [],
+        submoduleCfg: [],
+        userRemoteConfigs: [[
+            credentialsId: '4a724d76-8c25-400c-b4ad-54df10c02e21',
+            url: 'https://tech-devops@bitbucket.org/sagarsoft/facelift.git'
+    ]]])
+
+                }
+            }
+        
+        stage("build & publish") {
+            container('node') {
+                withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: 'd1916957-d9cd-43ab-94c6-1009ca528039',
+usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD']]) {
+                   sh """
+                      cd facelift
+                      echo "registry=http://34.66.13.165:8081/repository/npm-group/" >> .npmrc
+                      echo -n '${USERNAME}:${PASSWORD}' | openssl base64 >> .npmrc
+                      sed -i '2 s/^/_auth=/' .npmrc
+                      echo -e "email=npmuser@company.com\nalways-auth=true" >> .npmrc
+                      npm install
+                      sed -i 's/npm-group/npm-private/g' .npmrc
+                      npm publish
+                    """
+}
+}
+}
+               stage('Build image') {
+            container('docker') {
+  sh "docker build -t gcr.io/sil-rnd-231113/${APP_NAME}-${tag}:$BUILD_NUMBER ."
+}
+}
+stage('Push image') {
+    container('docker') {
+  docker.withRegistry('https://gcr.io', 'gcr:sentrifugo') {
+      sh "docker push gcr.io/sil-rnd-231113/${APP_NAME}-${tag}:$BUILD_NUMBER"
+    
+    
+  }
+    }
+}
+stage("deploy on kubernetes") {
+            container('kubectl') {
+                sh "kubectl set image deployment/hello-kubernetes hello-kubernetes=gcr.io/sil-rnd-231113/${APP_NAME}-${tag}:$BUILD_NUMBER"
+            }
+        }
+                }
+            }
